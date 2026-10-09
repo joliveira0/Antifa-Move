@@ -1,0 +1,57 @@
+
+@import url('https://fonts.googleapis.com/css2?family=Rock+Salt&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Permanent+Marker&display=swap');
+
+:root{
+    --preto: #000000;
+    --vermelho-antifa: #ff0000;
+    --sangue-facista: #732027; 
+    --branco: #ffff;
+}
+
+*{
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    font-family: "permanent marker";
+    color: var(--preto);
+}
+
+*>a{
+    text-decoration: none;
+}
+
+header{
+    padding: 2rem 1.5rem;
+}
+
+header>nav>ul{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin: 0rem 8rem;
+    list-style-type: none;
+}
+
+
+#links-header{
+    display: flex;
+    align-items: center;
+    gap: 2rem;
+}
+
+#slogan h1{
+    font-family: "Permanent Marker", cursive;
+    font-size: 5vw;
+    text-align: center;
+    background-color: var(--vermelho-antifa);
+    color: var(--branco);
+    padding: 0rem 5vw;
+    
+    clip-path: polygon(0% 0%, 90% 0%, 100% 20%, 100% 100%, 20% 100%, 0% 90%);
+}
+
+main{
+    display: flex;
+    justify-content: center;
+}
