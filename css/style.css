@@ -153,6 +153,23 @@ svg {
     position: relative;
 }
 
+.site-navigation .publish-nav-link {
+    min-height: 42px;
+    padding-inline: 16px;
+    background: var(--red);
+    color: var(--white);
+}
+
+.site-navigation .publish-nav-link::after {
+    display: none;
+}
+
+.site-navigation .publish-nav-link:hover,
+.site-navigation .publish-nav-link:focus-visible {
+    background: var(--black);
+    color: var(--white);
+}
+
 .site-navigation a::after {
     position: absolute;
     right: 0;
@@ -1069,6 +1086,111 @@ svg {
     color: var(--white);
 }
 
+.publish-workspace {
+    padding-top: 54px;
+}
+
+.publish-notice {
+    margin: 0 0 26px;
+    padding: 14px 18px;
+    border-left: 4px solid var(--yellow);
+    background: var(--black);
+    color: var(--white);
+    font-family: var(--font-condensed);
+    font-size: 1.1rem;
+}
+
+.publish-types {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 32px;
+    border-bottom: 1px solid var(--line);
+}
+
+.publish-type {
+    min-height: 46px;
+    padding: 0 18px;
+    border: 1px solid var(--line);
+    border-bottom: 0;
+    background: transparent;
+    color: var(--black);
+    cursor: pointer;
+    font-family: var(--font-condensed);
+    font-size: 1.08rem;
+    font-weight: 800;
+}
+
+.publish-type.is-active {
+    background: var(--yellow);
+}
+
+.publish-form {
+    max-width: 850px;
+}
+
+.publish-fields {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 22px 24px;
+}
+
+.publish-field {
+    display: grid;
+    min-width: 0;
+    gap: 7px;
+}
+
+.publish-field-wide {
+    grid-column: 1 / -1;
+}
+
+.publish-label {
+    font-family: var(--font-condensed);
+    font-size: 1.05rem;
+    font-weight: 800;
+}
+
+.publish-field input,
+.publish-field select,
+.publish-field textarea {
+    width: 100%;
+    min-height: 48px;
+    padding: 11px 13px;
+    border: 1px solid var(--line);
+    border-radius: 0;
+    background: var(--white);
+    color: var(--black);
+    font: inherit;
+}
+
+.publish-field textarea {
+    min-height: 120px;
+    resize: vertical;
+}
+
+.publish-field input[type="file"] {
+    padding: 8px;
+}
+
+.publish-submit {
+    min-height: 48px;
+    margin-top: 28px;
+    padding: 0 20px;
+    border: 0;
+    background: var(--red);
+    color: var(--white);
+    font-family: var(--font-condensed);
+    font-size: 1.05rem;
+    font-weight: 900;
+    text-transform: uppercase;
+}
+
+.publish-submit:disabled {
+    background: var(--gray);
+    color: var(--white);
+}
+
 @media (max-width: 900px) {
     .content-width,
     .site-header,
@@ -1114,6 +1236,11 @@ svg {
     .document-controls {
         align-items: flex-start;
         flex-direction: column;
+    }
+
+    .site-navigation .publish-nav-link {
+        width: fit-content;
+        margin-top: 8px;
     }
 
     .search-field {
@@ -1233,6 +1360,22 @@ svg {
     .document-controls {
         gap: 22px;
         margin-bottom: 34px;
+    }
+
+    .publish-workspace {
+        padding-top: 38px;
+    }
+
+    .publish-fields {
+        grid-template-columns: 1fr;
+    }
+
+    .publish-field-wide {
+        grid-column: auto;
+    }
+
+    .publish-type {
+        flex: 1 1 calc(50% - 8px);
     }
 
     .filter-list {

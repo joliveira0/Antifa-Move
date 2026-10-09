@@ -6,13 +6,14 @@ Opa! Esse arquivo é uma "passagem de bastão" pros devs que entrarem nessa ao l
 
 ## Resumo rápido
 
-O projeto está um frontend estático feito com HTML, CSS e JavaScript em módulos. Não há framework, `package.json`, API, banco de dados, login ou painel de publicação configurado neste repositório.
+O frontend continua feito com HTML, CSS e JavaScript em módulos. O servidor Node.js/Express oferece uma API de leitura ligada a PostgreSQL, pronta para receber a URL de conexão do Neon. Login e publicação ainda não estão configurados.
 
 As notícias, documentos, histórias e lambes que aparecem hoje são exemplos escritos no arquivo `js/data.js`. Eles não são enviados a lugar algum e se perdem como fonte de conteúdo assim que forem substituídos por dados reais do CMS.
 
 ## O que já está funcionando
 
-- As cinco páginas: `/`(Home), `/docs`, `/historia`, `/lambes` e `/noticias`.
+- As páginas públicas: `/` (Home), `/docs`, `/historia`, `/lambes` e `/noticias`.
+- A tela provisória de preparação editorial em `/publicar/publicar.html`; ainda sem login, persistência ou publicação.
 - Navegação entre páginas, link ativo e botão de menu para telas pequenas.
 - Busca e filtros locais na biblioteca de documentos.
 - Filtros locais na página de notícias.
@@ -120,6 +121,19 @@ Antes de implementar, precisamos decidir:
 - Manter a busca e os filtros ligados aos dados recebidos do CMS, sem duplicar notícias em HTML fixo.
 - Para downloads, mostrar uma ação apenas quando houver um arquivo real disponível.
 
+
+## Backend inicial
+
+- Requer Node.js 22 ou superior.
+- Copie `.env.example` para `.env` e substitua `DATABASE_URL` pela connection string do Neon. O arquivo `.env` está ignorado pelo Git; nunca publique credenciais.
+- `npm install` instala as dependências; `npm run db:check` testa a conexão, `npm run db:setup` cria o schema e carrega os exemplos, `npm run dev` inicia o servidor em modo de desenvolvimento e `npm start` inicia normalmente.
+- O site e a API ficam disponíveis na mesma origem, por padrão em `http://localhost:3000`.
+- `GET /api/health` verifica o servidor e a conexão ao banco.
+- `GET /api/news`, `/api/documents`, `/api/histories` e `/api/posters` retornam as coleções em JSON.
+- O schema fica em `db/schema.sql`. A tabela `content` separa as coleções e armazena os objetos em JSONB; na primeira inicialização, os exemplos de `js/data.js` são copiados sem sobrescrever registros existentes.
+- Esta etapa não oferece rotas de escrita ou autenticação. As coleções podem ser consultadas pela API, mas o frontend ainda usa seus módulos locais.
+
+Para rodar os testes da API: `npm test`.
 
 ## Próximo passo sugerido
 

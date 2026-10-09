@@ -5,7 +5,8 @@ const pageDetails = {
     docs: { title: "Docs", path: "/docs" },
     historia: { title: "História", path: "/historia" },
     lambes: { title: "Lambes", path: "/lambes" },
-    noticias: { title: "Notícias", path: "/noticias" }
+    noticias: { title: "Notícias", path: "/noticias" },
+    publicar: { title: "Publicar", path: "/publicar/publicar.html" }
 };
 
 const page = document.body.dataset.page || "home";
@@ -40,7 +41,8 @@ function renderHeader() {
     const host = document.querySelector("#site-header");
     const links = Object.entries(pageDetails).map(([key, item]) => {
         const active = key === page;
-        return `<li><a href="${item.path}"${active ? ' aria-current="page"' : ""}>${item.title}</a></li>`;
+        const className = key === "publicar" ? ' class="publish-nav-link"' : "";
+        return `<li><a${className} href="${item.path}"${active ? ' aria-current="page"' : ""}>${item.title}</a></li>`;
     }).join("");
 
     host.innerHTML = `
@@ -436,6 +438,127 @@ function renderNewsPage() {
     updateNews();
 }
 
+function createPublishField(labelText, type, options = {}) {
+    const label = makeElement("label", "publish-field");
+    label.append(makeElement("span", "publish-label", labelText));
+
+    let control;
+    if (type === "textarea") {
+        control = makeElement("textarea");
+        control.rows = options.rows || 4;
+    } else if (type === "select") {
+        control = makeElement("select");
+        options.values.forEach((value) => {
+            const option = makeElement("option", "", value);
+            option.value = value;
+            control.append(option);
+        });
+    } else {
+        control = makeElement("input");
+        control.type = type;
+    }
+
+    control.name = options.name;
+    control.required = Boolean(options.required);
+    if (options.accept) control.accept = options.accept;
+    if (options.min) control.min = options.min;
+    if (options.placeholder) control.placeholder = options.placeholder;
+    if (options.wide) label.classList.add("publish-field-wide");
+    label.append(control);
+    return label;
+}
+
+function renderPublishPage() {
+    pageContent.append(renderPageHero(
+        "Área editorial",
+        "Preparar publicação",
+        "Organize notícias, materiais e registros históricos em um só lugar."
+    ));
+
+    const section = makeElement("section", "content-width publish-workspace");
+    section.setAttribute("aria-label", "Preparação de conteúdo");
+
+    const notice = makeElement("p", "publish-notice", "Área provisória, sem login: este formulário ainda não salva nem publica conteúdo. Não use dados sensíveis. O envio será ativado quando a API e o banco PostgreSQL estiverem conectados.");
+    notice.setAttribute("role", "status");
+    section.append(notice);
+
+    const types = [
+        { id: "news", label: "Notícia" },
+        { id: "poster", label: "Lambe" },
+        { id: "document", label: "Documento" },
+        { id: "history", label: "História" }
+    ];
+    const typeSelector = makeElement("div", "publish-types");
+    typeSelector.setAttribute("role", "group");
+    typeSelector.setAttribute("aria-label", "Tipo de conteúdo");
+
+    const fields = makeElement("div", "publish-fields");
+    const submit = makeElement("button", "publish-submit", "Enviar para publicação");
+    submit.type = "submit";
+    submit.disabled = true;
+
+    const form = makeElement("form", "publish-form");
+    form.addEventListener("submit", (event) => event.preventDefault());
+
+    function renderFields(type) {
+        fields.replaceChildren();
+        fields.append(createPublishField("Título", "text", {
+            name: "title",
+            placeholder: "Escreva um título",
+            required: true,
+            wide: true
+        }));
+
+        if (type === "news") {
+            fields.append(
+                createPublishField("Categoria", "select", { name: "category", values: ["Trabalho", "Economia", "Direitos", "Política", "História", "Cidade"] }),
+                createPublishField("Imagem de capa", "url", { name: "imageUrl", placeholder: "https://..." }),
+                createPublishField("Resumo", "textarea", { name: "summary", required: true }),
+                createPublishField("Texto da notícia", "textarea", { name: "body", rows: 8, required: true, wide: true })
+            );
+        } else if (type === "poster") {
+            fields.append(
+                createPublishField("Prévia do lambe", "file", { name: "preview", accept: "image/*" }),
+                createPublishField("Arquivo para impressão", "file", { name: "file", accept: ".svg,.pdf,image/svg+xml,application/pdf", required: true }),
+                createPublishField("Formato", "select", { name: "format", values: ["A3", "A2", "Outro"] })
+            );
+        } else if (type === "document") {
+            fields.append(
+                createPublishField("Categoria", "select", { name: "category", values: ["Trabalho", "Economia", "Direitos", "Cidade", "História"] }),
+                createPublishField("Arquivo PDF", "file", { name: "file", accept: "application/pdf,.pdf", required: true })
+            );
+        } else {
+            fields.append(
+                createPublishField("Ano", "number", { name: "year", min: "1", required: true }),
+                createPublishField("Categoria", "select", { name: "category", values: ["Trabalho", "Democracia", "Cidade", "Direitos"] }),
+                createPublishField("Imagem", "url", { name: "imageUrl", placeholder: "https://..." }),
+                createPublishField("Resumo", "textarea", { name: "summary", required: true }),
+                createPublishField("Texto", "textarea", { name: "body", rows: 8, required: true, wide: true })
+            );
+        }
+    }
+
+    types.forEach((type, index) => {
+        const button = makeElement("button", `publish-type${index === 0 ? " is-active" : ""}`, type.label);
+        button.type = "button";
+        button.setAttribute("aria-pressed", String(index === 0));
+        button.addEventListener("click", () => {
+            typeSelector.querySelectorAll("button").forEach((item) => {
+                const selected = item === button;
+                item.classList.toggle("is-active", selected);
+                item.setAttribute("aria-pressed", String(selected));
+            });
+            renderFields(type.id);
+        });
+        typeSelector.append(button);
+    });
+
+    form.append(fields, submit);
+    section.append(typeSelector, form);
+    pageContent.append(section);
+    renderFields("news");
+}
+
 renderHeader();
 renderFooter();
 
@@ -444,7 +567,8 @@ const renderers = {
     docs: renderDocumentsPage,
     historia: renderHistoryPage,
     lambes: renderPostersPage,
-    noticias: renderNewsPage
+    noticias: renderNewsPage,
+    publicar: renderPublishPage
 };
 
 document.title = `${pageDetails[page]?.title || "Home"} — Antifa Move`;
