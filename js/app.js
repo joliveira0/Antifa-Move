@@ -1,4 +1,4 @@
-import { documents, histories, news, posters } from "/js/data.js";
+import { histories, posters } from "/js/data.js";
 
 const pageDetails = {
     home: { title: "Home", path: "/" },
@@ -6,7 +6,7 @@ const pageDetails = {
     historia: { title: "História", path: "/historia" },
     lambes: { title: "Lambes", path: "/lambes" },
     noticias: { title: "Notícias", path: "/noticias" },
-    publicar: { title: "Publicar", path: "/publicar/publicar.html" }
+    publicar: { title: "Publicar", path: "/publicar" }
 };
 
 const page = document.body.dataset.page || "home";
@@ -17,6 +17,20 @@ function makeElement(tagName, className, text) {
     if (className) element.className = className;
     if (text !== undefined) element.textContent = text;
     return element;
+}
+
+async function loadCollection(name) {
+    const response = await fetch(`/api/${name}`);
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "Não foi possível carregar o conteúdo.");
+    return result;
+}
+
+function renderLoadError(container, error) {
+    console.error("Falha ao carregar conteúdo:", error);
+    const message = makeElement("p", "empty-state", "Não foi possível carregar o conteúdo agora. Tente novamente mais tarde.");
+    message.setAttribute("role", "alert");
+    container.replaceChildren(message);
 }
 
 function makeIcon(name) {
@@ -132,10 +146,11 @@ function makeArrowLink(label, href, className = "text-link") {
 function createNewsCard(item, options = {}) {
     const { featured = false, homeCard = false } = options;
     const article = makeElement("article", `news-card${featured ? " news-card-featured history-feature" : ""}${homeCard ? " news-card-home" : ""}`);
-    article.id = `noticia-${item.id}`;
+    const articlePath = `/noticias/${encodeURIComponent(item.slug || item.id)}`;
+    article.id = `noticia-${item.slug || item.id}`;
 
     const imageLink = makeElement("a", `news-image-link${featured ? " history-feature-image" : ""}`);
-    imageLink.href = `/noticias#noticia-${item.id}`;
+    imageLink.href = articlePath;
     imageLink.setAttribute("aria-label", `Abrir notícia: ${item.title}`);
     imageLink.append(createPhoto(item.image, `Imagem editorial: ${item.title}`));
     imageLink.append(makeElement("span", "image-category", item.category));
@@ -144,15 +159,16 @@ function createNewsCard(item, options = {}) {
     const content = makeElement("div", `news-card-content${featured ? " history-feature-copy" : ""}`);
     content.append(makeElement("time", "news-date", item.date));
     content.querySelector("time").dateTime = item.isoDate;
+    if (item.author) content.append(makeElement("p", "news-author", `Por ${item.author}`));
     content.append(makeElement("h3", "news-card-title", item.title));
     content.append(makeElement("p", "news-card-summary", item.summary));
-    content.append(makeArrowLink("Ler matéria", `/noticias#noticia-${item.id}`));
+    content.append(makeArrowLink("Ler matéria", articlePath));
 
     article.append(imageLink, content);
     return article;
 }
 
-function renderHome() {
+async function renderHome() {
     const hero = makeElement("section", "home-hero");
     hero.setAttribute("aria-labelledby", "home-title");
     const poster = makeElement("div", "hero-poster");
@@ -175,7 +191,15 @@ function renderHome() {
     headingRow.append(heading);
     headingRow.append(makeArrowLink("Ver todas", "/noticias", "button-link"));
     const grid = makeElement("div", "home-news-grid");
-    news.slice(0, 3).forEach((item) => grid.append(createNewsCard(item, { homeCard: true })));
+    grid.append(makeElement("p", "empty-state", "Carregando notícias..."));
+    try {
+        const news = await loadCollection("news");
+        grid.replaceChildren();
+        if (!news.length) grid.append(makeElement("p", "empty-state", "Ainda não há notícias publicadas."));
+        news.slice(0, 3).forEach((item) => grid.append(createNewsCard(item, { homeCard: true })));
+    } catch (error) {
+        renderLoadError(grid, error);
+    }
     section.append(headingRow, grid);
 
     pageContent.append(hero, section);
@@ -203,7 +227,7 @@ function updateFilterButtons(group, selected) {
     });
 }
 
-function renderDocumentsPage() {
+async function renderDocumentsPage() {
     pageContent.append(renderPageHero(
         "Biblioteca popular",
         "Docs",
@@ -222,14 +246,15 @@ function renderDocumentsPage() {
     searchLabel.append(searchInput);
     controls.append(searchLabel);
 
-    const categories = ["Todos", "Trabalho", "Economia", "Direitos", "Cidade"];
+    let documents;
+    let categories = ["Todos"];
     let selected = "Todos";
     const results = makeElement("div", "document-results");
     const resultCount = makeElement("p", "visually-hidden", "");
 
     function updateDocuments() {
         const query = searchInput.value.trim().toLocaleLowerCase("pt-BR");
-        const filtered = documents.filter((item) => {
+        const filtered = (documents || []).filter((item) => {
             const matchesCategory = selected === "Todos" || item.category === selected;
             return matchesCategory && item.title.toLocaleLowerCase("pt-BR").includes(query);
         });
@@ -256,19 +281,26 @@ function renderDocumentsPage() {
             details.append(makeElement("time", "", item.date));
             const action = makeElement("div", "document-action");
             action.dataset.label = "Ação";
-            const download = makeElement("button", "download-button", "Baixar");
-            download.type = "button";
-            download.disabled = !item.url;
-            download.title = item.url ? "Baixar documento" : "PDF ainda não disponível";
-            download.setAttribute("aria-label", item.url ? `Baixar ${item.title}` : `Download indisponível: ${item.title}`);
-            action.append(download);
+            if (item.url) {
+                const download = makeElement("a", "download-button", "Baixar");
+                download.href = item.url;
+                download.setAttribute("aria-label", `Baixar ${item.title}`);
+                action.append(download);
+            } else {
+                const download = makeElement("button", "download-button", "Baixar");
+                download.type = "button";
+                download.disabled = true;
+                download.title = "PDF ainda não disponível";
+                download.setAttribute("aria-label", `Download indisponível: ${item.title}`);
+                action.append(download);
+            }
             if (!item.url) action.append(makeElement("span", "availability-note", "PDF indisponível"));
             row.append(titleCell, category, details, action);
             results.append(row);
         });
     }
 
-    const filters = renderFilterButtons(categories, selected, (category) => {
+    let filters = renderFilterButtons(categories, selected, (category) => {
         selected = category;
         updateFilterButtons(filters, selected);
         updateDocuments();
@@ -281,7 +313,19 @@ function renderDocumentsPage() {
     ["Documento", "Categoria", "Detalhes", "Ação"].forEach((label) => tableHeader.append(makeElement("span", "", label)));
     section.append(tableHeader, results);
     pageContent.append(section);
-    updateDocuments();
+    results.append(makeElement("p", "empty-state", "Carregando documentos..."));
+    try {
+        documents = await loadCollection("documents");
+        categories = ["Todos", ...new Set(documents.map((item) => item.category))];
+        filters.replaceWith(filters = renderFilterButtons(categories, selected, (category) => {
+            selected = category;
+            updateFilterButtons(filters, selected);
+            updateDocuments();
+        }, "Filtrar documentos por categoria"));
+        updateDocuments();
+    } catch (error) {
+        renderLoadError(results, error);
+    }
 }
 
 function renderHistoryCard(item) {
@@ -404,7 +448,42 @@ function renderPostersPage() {
     pageContent.append(section);
 }
 
-function renderNewsPage() {
+async function renderNewsArticle(slug) {
+    const article = makeElement("article", "content-width news-article");
+    article.append(makeElement("p", "empty-state", "Carregando matéria..."));
+    pageContent.append(article);
+    try {
+        const response = await fetch(`/api/news/${encodeURIComponent(slug)}`);
+        const item = await response.json();
+        if (!response.ok) throw new Error(item.error || "Notícia não encontrada.");
+
+        const content = makeElement("div", "news-article-content");
+        content.append(makeElement("p", "eyebrow", item.category));
+        content.append(makeElement("h1", "hand-heading", item.title));
+        const date = makeElement("time", "news-date", item.date);
+        date.dateTime = item.isoDate;
+        content.append(date);
+        if (item.author) content.append(makeElement("p", "news-author", `Por ${item.author}`));
+        content.append(createPhoto(item.image, `Imagem editorial: ${item.title}`, "news-article-image"));
+        content.append(makeElement("p", "news-article-summary", item.summary));
+        (item.body || item.summary || "").split(/\n{2,}/).filter(Boolean).forEach((paragraph) => {
+            content.append(makeElement("p", "news-article-paragraph", paragraph));
+        });
+        article.replaceChildren(makeArrowLink("Voltar para notícias", "/noticias", "button-link"), content);
+        document.title = `${item.title} — Antifa Move`;
+    } catch (error) {
+        renderLoadError(article, error);
+        if (error.message === "Notícia não encontrada.") article.querySelector(".empty-state").textContent = error.message;
+    }
+}
+
+async function renderNewsPage() {
+    const slug = window.location.pathname.replace(/^\/noticias\/?/, "").replace(/\/$/, "");
+    if (slug) {
+        await renderNewsArticle(slug);
+        return;
+    }
+
     pageContent.append(renderPageHero(
         "Informação para agir",
         "Notícias",
@@ -413,13 +492,14 @@ function renderNewsPage() {
 
     const section = makeElement("section", "content-width news-archive");
     section.setAttribute("aria-label", "Arquivo de notícias");
-    const categories = ["Todas", "Trabalho", "Economia", "Direitos", "Política", "História", "Cidade"];
+    let news;
+    let categories = ["Todas"];
     let selected = "Todas";
     const grid = makeElement("div", "news-archive-grid");
     let filters;
 
     function updateNews() {
-        const visible = news.filter((item) => selected === "Todas" || item.category === selected);
+        const visible = (news || []).filter((item) => selected === "Todas" || item.category === selected);
         grid.replaceChildren();
         if (!visible.length) {
             grid.append(makeElement("p", "empty-state", "Nenhuma notícia encontrada nesta categoria."));
@@ -435,7 +515,19 @@ function renderNewsPage() {
     }, "Filtrar notícias por categoria");
     section.append(filters, grid);
     pageContent.append(section);
-    updateNews();
+    grid.append(makeElement("p", "empty-state", "Carregando notícias..."));
+    try {
+        news = await loadCollection("news");
+        categories = ["Todas", ...new Set(news.map((item) => item.category))];
+        filters.replaceWith(filters = renderFilterButtons(categories, selected, (category) => {
+            selected = category;
+            updateFilterButtons(filters, selected);
+            updateNews();
+        }, "Filtrar notícias por categoria"));
+        updateNews();
+    } catch (error) {
+        renderLoadError(grid, error);
+    }
 }
 
 function createPublishField(labelText, type, options = {}) {
@@ -460,6 +552,7 @@ function createPublishField(labelText, type, options = {}) {
 
     control.name = options.name;
     control.required = Boolean(options.required);
+    if (options.maxLength) control.maxLength = Number(options.maxLength);
     if (options.accept) control.accept = options.accept;
     if (options.min) control.min = options.min;
     if (options.placeholder) control.placeholder = options.placeholder;
@@ -468,95 +561,251 @@ function createPublishField(labelText, type, options = {}) {
     return label;
 }
 
-function renderPublishPage() {
+async function renderPublishPage() {
     pageContent.append(renderPageHero(
-        "Área editorial",
-        "Preparar publicação",
-        "Organize notícias, materiais e registros históricos em um só lugar."
+        "Espaço aberto",
+        "Envie uma publicação",
+        "Envie notícias e documentos sem criar uma conta. A equipe revisa cada envio antes de publicar."
     ));
 
     const section = makeElement("section", "content-width publish-workspace");
     section.setAttribute("aria-label", "Preparação de conteúdo");
-
-    const notice = makeElement("p", "publish-notice", "Área provisória, sem login: este formulário ainda não salva nem publica conteúdo. Não use dados sensíveis. O envio será ativado quando a API e o banco PostgreSQL estiverem conectados.");
+    pageContent.append(section);
+    const notice = makeElement("p", "publish-notice", "Não é necessário criar uma conta. Os envios ficam privados até a aprovação da equipe. Envie apenas materiais que você tem autorização para compartilhar.");
     notice.setAttribute("role", "status");
-    section.append(notice);
+    const modes = makeElement("div", "publish-types");
+    modes.setAttribute("role", "group");
+    modes.setAttribute("aria-label", "Ações da área de publicação");
+    const submissionButton = makeElement("button", "publish-type is-active", "Enviar conteúdo");
+    const moderationButton = makeElement("button", "publish-type", "Moderação");
+    [submissionButton, moderationButton].forEach((button) => {
+        button.type = "button";
+        button.setAttribute("aria-pressed", String(button === submissionButton));
+    });
+    section.append(notice, modes);
+    modes.append(submissionButton, moderationButton);
 
-    const types = [
-        { id: "news", label: "Notícia" },
-        { id: "poster", label: "Lambe" },
-        { id: "document", label: "Documento" },
-        { id: "history", label: "História" }
-    ];
-    const typeSelector = makeElement("div", "publish-types");
-    typeSelector.setAttribute("role", "group");
-    typeSelector.setAttribute("aria-label", "Tipo de conteúdo");
+    function selectMode(selectedButton) {
+        [submissionButton, moderationButton].forEach((button) => {
+            const selected = button === selectedButton;
+            button.classList.toggle("is-active", selected);
+            button.setAttribute("aria-pressed", String(selected));
+        });
+    }
 
-    const fields = makeElement("div", "publish-fields");
-    const submit = makeElement("button", "publish-submit", "Enviar para publicação");
-    submit.type = "submit";
-    submit.disabled = true;
+    function showSubmissionForm(type = "news") {
+        selectMode(submissionButton);
+        const selector = makeElement("div", "publish-types");
+        selector.setAttribute("role", "group");
+        selector.setAttribute("aria-label", "Tipo de envio");
+        const fields = makeElement("div", "publish-fields");
+        const form = makeElement("form", "publish-form");
+        const submit = makeElement("button", "publish-submit", "");
+        submit.type = "submit";
+        const feedback = makeElement("p", "publish-feedback", "");
+        feedback.setAttribute("role", "status");
+        let selectedType = type;
 
-    const form = makeElement("form", "publish-form");
-    form.addEventListener("submit", (event) => event.preventDefault());
+        function renderFields(contentType) {
+            selectedType = contentType;
+            fields.replaceChildren();
+            fields.append(createPublishField("Título", "text", {
+                name: "title",
+                placeholder: "Escreva um título",
+                required: true,
+                maxLength: "180",
+                wide: true
+            }));
+            if (contentType === "news") {
+                fields.append(
+                    createPublishField("Seu nome (opcional)", "text", { name: "author", maxLength: "100" }),
+                    createPublishField("Categoria", "select", { name: "category", values: ["Trabalho", "Economia", "Direitos", "Política", "História", "Cidade"] }),
+                    createPublishField("Imagem de capa", "file", { name: "image", accept: "image/jpeg,image/png,image/webp", required: true }),
+                    createPublishField("Resumo", "textarea", { name: "summary", required: true, maxLength: "300", wide: true }),
+                    createPublishField("Texto da notícia", "textarea", { name: "body", rows: 10, required: true, maxLength: "30000", wide: true })
+                );
+                submit.textContent = "Enviar notícia para revisão";
+            } else {
+                fields.append(
+                    createPublishField("Categoria", "select", { name: "category", values: ["Trabalho", "Economia", "Direitos", "Cidade", "História"] }),
+                    createPublishField("Número de páginas", "number", { name: "pages", min: "1", required: true }),
+                    createPublishField("Arquivo PDF", "file", { name: "file", accept: "application/pdf,.pdf", required: true, wide: true })
+                );
+                submit.textContent = "Enviar documento para revisão";
+            }
+        }
 
-    function renderFields(type) {
-        fields.replaceChildren();
-        fields.append(createPublishField("Título", "text", {
-            name: "title",
-            placeholder: "Escreva um título",
-            required: true,
-            wide: true
-        }));
+        const contentTypes = [
+            { id: "news", label: "Notícia" },
+            { id: "document", label: "Documento" }
+        ];
+        contentTypes.forEach((contentType) => {
+            const button = makeElement("button", `publish-type${contentType.id === type ? " is-active" : ""}`, contentType.label);
+            button.type = "button";
+            button.setAttribute("aria-pressed", String(contentType.id === type));
+            button.addEventListener("click", () => {
+                selector.querySelectorAll("button").forEach((item) => {
+                    const selected = item === button;
+                    item.classList.toggle("is-active", selected);
+                    item.setAttribute("aria-pressed", String(selected));
+                });
+                feedback.textContent = "";
+                renderFields(contentType.id);
+            });
+            selector.append(button);
+        });
 
-        if (type === "news") {
-            fields.append(
-                createPublishField("Categoria", "select", { name: "category", values: ["Trabalho", "Economia", "Direitos", "Política", "História", "Cidade"] }),
-                createPublishField("Imagem de capa", "url", { name: "imageUrl", placeholder: "https://..." }),
-                createPublishField("Resumo", "textarea", { name: "summary", required: true }),
-                createPublishField("Texto da notícia", "textarea", { name: "body", rows: 8, required: true, wide: true })
-            );
-        } else if (type === "poster") {
-            fields.append(
-                createPublishField("Prévia do lambe", "file", { name: "preview", accept: "image/*" }),
-                createPublishField("Arquivo para impressão", "file", { name: "file", accept: ".svg,.pdf,image/svg+xml,application/pdf", required: true }),
-                createPublishField("Formato", "select", { name: "format", values: ["A3", "A2", "Outro"] })
-            );
-        } else if (type === "document") {
-            fields.append(
-                createPublishField("Categoria", "select", { name: "category", values: ["Trabalho", "Economia", "Direitos", "Cidade", "História"] }),
-                createPublishField("Arquivo PDF", "file", { name: "file", accept: "application/pdf,.pdf", required: true })
-            );
-        } else {
-            fields.append(
-                createPublishField("Ano", "number", { name: "year", min: "1", required: true }),
-                createPublishField("Categoria", "select", { name: "category", values: ["Trabalho", "Democracia", "Cidade", "Direitos"] }),
-                createPublishField("Imagem", "url", { name: "imageUrl", placeholder: "https://..." }),
-                createPublishField("Resumo", "textarea", { name: "summary", required: true }),
-                createPublishField("Texto", "textarea", { name: "body", rows: 8, required: true, wide: true })
-            );
+        form.append(fields, submit, feedback);
+        form.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            submit.disabled = true;
+            feedback.textContent = "Enviando para revisão...";
+            try {
+                const data = new FormData(form);
+                const file = data.get(selectedType === "news" ? "image" : "file");
+                const uploadResponse = await fetch("/api/uploads", {
+                    method: "POST",
+                    headers: { "Content-Type": file.type || (selectedType === "document" ? "application/pdf" : "") },
+                    body: file
+                });
+                const upload = await uploadResponse.json();
+                if (!uploadResponse.ok) throw new Error(upload.error || "Falha ao enviar o arquivo.");
+
+                const payload = selectedType === "news"
+                    ? {
+                        title: data.get("title"),
+                        author: data.get("author"),
+                        category: data.get("category"),
+                        summary: data.get("summary"),
+                        body: data.get("body"),
+                        image: upload.url
+                    }
+                    : {
+                        title: data.get("title"),
+                        category: data.get("category"),
+                        pages: Number(data.get("pages")),
+                        url: upload.url
+                    };
+                const endpoint = selectedType === "news" ? "news" : "documents";
+                const response = await fetch(`/api/submissions/${endpoint}`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.error || "Não foi possível enviar o conteúdo.");
+                form.reset();
+                feedback.textContent = result.message;
+            } catch (error) {
+                feedback.textContent = error.message;
+            } finally {
+                submit.disabled = false;
+            }
+        });
+
+        section.replaceChildren(notice, modes, selector, form);
+        renderFields(type);
+    }
+
+    async function showModeration() {
+        selectMode(moderationButton);
+        const panel = makeElement("section", "moderation-panel");
+        panel.setAttribute("aria-label", "Moderação dos envios recebidos");
+        panel.append(makeElement("p", "empty-state", "Verificando acesso..."));
+        section.replaceChildren(notice, modes, panel);
+
+        function showLocked() {
+            panel.replaceChildren();
+            panel.append(makeElement("p", "publish-notice", "Área restrita. Para moderar, abra o link secreto fornecido pela equipe responsável."));
+        }
+
+        async function loadPendingSubmissions() {
+            const response = await fetch("/api/moderation/pending");
+            const result = await response.json();
+            if (response.status === 401) {
+                showLocked();
+                return;
+            }
+            if (!response.ok) throw new Error(result.error || "Não foi possível carregar os envios.");
+            panel.replaceChildren();
+            const toolbar = makeElement("div", "publish-toolbar");
+            toolbar.append(makeElement("p", "publish-notice", "Fila de revisão: aprove para publicar ou rejeite para remover o envio."));
+            const logout = makeElement("button", "publish-logout", "Sair");
+            logout.type = "button";
+            logout.addEventListener("click", async () => {
+                const logoutResponse = await fetch("/api/editor/logout", { method: "POST" });
+                if (!logoutResponse.ok) {
+                    panel.append(makeElement("p", "publish-feedback", "Não foi possível encerrar a sessão."));
+                    return;
+                }
+                showLocked();
+            });
+            toolbar.append(logout);
+            panel.append(toolbar);
+            const entries = [
+                ...result.news.map((item) => ({ ...item, kind: "news" })),
+                ...result.documents.map((item) => ({ ...item, kind: "documents" }))
+            ];
+            if (!entries.length) {
+                panel.append(makeElement("p", "empty-state", "Nenhum envio aguardando aprovação."));
+                return;
+            }
+            entries.forEach((item) => {
+                const card = makeElement("article", "moderation-card");
+                card.append(makeElement("p", "eyebrow", `${item.kind === "news" ? "Notícia" : "Documento"} · ${item.category}`));
+                card.append(makeElement("h2", "", item.title));
+                if (item.author) card.append(makeElement("p", "", `Enviado por ${item.author}`));
+                if (item.kind === "news") {
+                    card.append(makeElement("p", "", item.summary));
+                    card.append(makeElement("p", "moderation-body", item.body));
+                }
+                const fileName = item.kind === "news" ? item.image.split("/").pop() : item.url.split("/").pop();
+                const fileUrl = `/api/moderation/uploads/${encodeURIComponent(fileName)}`;
+                if (item.kind === "news") {
+                    card.append(createPhoto(fileUrl, `Imagem enviada: ${item.title}`, "moderation-image"));
+                } else {
+                    const fileLink = makeArrowLink("Abrir PDF enviado", fileUrl);
+                    fileLink.target = "_blank";
+                    fileLink.rel = "noopener noreferrer";
+                    card.append(fileLink, makeElement("p", "", `${item.pages} páginas`));
+                }
+                const actions = makeElement("div", "moderation-actions");
+                [["approve", "Aprovar e publicar"], ["reject", "Rejeitar"]].forEach(([action, label]) => {
+                    const button = makeElement("button", action === "approve" ? "publish-submit" : "publish-logout", label);
+                    button.type = "button";
+                    button.addEventListener("click", async () => {
+                        button.disabled = true;
+                        try {
+                            const moderationResponse = await fetch(`/api/moderation/${item.kind}/${item.id}/${action}`, { method: "POST" });
+                            const moderationResult = await moderationResponse.json();
+                            if (!moderationResponse.ok) throw new Error(moderationResult.error || "Falha ao moderar.");
+                            await loadPendingSubmissions();
+                        } catch (error) {
+                            button.disabled = false;
+                            card.append(makeElement("p", "publish-feedback", error.message));
+                        }
+                    });
+                    actions.append(button);
+                });
+                card.append(actions);
+                panel.append(card);
+            });
+        }
+
+        try {
+            const sessionResponse = await fetch("/api/editor/session");
+            const session = await sessionResponse.json();
+            if (session.authenticated) await loadPendingSubmissions();
+            else showLocked();
+        } catch (error) {
+            panel.replaceChildren(makeElement("p", "empty-state", error.message));
         }
     }
 
-    types.forEach((type, index) => {
-        const button = makeElement("button", `publish-type${index === 0 ? " is-active" : ""}`, type.label);
-        button.type = "button";
-        button.setAttribute("aria-pressed", String(index === 0));
-        button.addEventListener("click", () => {
-            typeSelector.querySelectorAll("button").forEach((item) => {
-                const selected = item === button;
-                item.classList.toggle("is-active", selected);
-                item.setAttribute("aria-pressed", String(selected));
-            });
-            renderFields(type.id);
-        });
-        typeSelector.append(button);
-    });
-
-    form.append(fields, submit);
-    section.append(typeSelector, form);
-    pageContent.append(section);
-    renderFields("news");
+    submissionButton.addEventListener("click", () => showSubmissionForm());
+    moderationButton.addEventListener("click", showModeration);
+    if (new URLSearchParams(window.location.search).has("moderar")) showModeration();
+    else showSubmissionForm();
 }
 
 renderHeader();

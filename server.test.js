@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createApp } from "./server.js";
 import { documents, histories, news, posters } from "./js/data.js";
 import { initializeDatabase } from "./database.js";
@@ -7,11 +10,47 @@ import { initializeDatabase } from "./database.js";
 let server;
 let database;
 let baseUrl;
+let testDirectory;
+let pendingUploadsDirectory;
+let uploadsDirectory;
+const moderationKey = "test-moderation-key-long-enough-to-be-secret";
+let pendingNews = [];
+let pendingDocuments = [];
+let moderationCookie;
 
 before(async () => {
+    testDirectory = await mkdtemp(join(tmpdir(), "antifa-move-test-"));
+    pendingUploadsDirectory = join(testDirectory, "pending");
+    uploadsDirectory = join(testDirectory, "public");
+    await mkdir(pendingUploadsDirectory);
+    await writeFile(join(pendingUploadsDirectory, "123e4567-e89b-12d3-a456-426614174000.jpg"), "test upload");
     database = {
-        async query(sql) {
+        async query(sql, values = []) {
             if (sql.includes("SELECT 1")) return { rows: [{ "?column?": 1 }] };
+            if (sql.includes("INSERT INTO news")) {
+                const [id, slug, category, title, author, summary, body, image, date, isoDate] = values;
+                const item = { id, slug, category, title, author, summary, body, image, date, iso_date: isoDate, status: "pending" };
+                pendingNews.push(item);
+                return { rows: [item] };
+            }
+            if (sql.includes("INSERT INTO documents")) {
+                const [id, title, category, pages, date, url] = values;
+                const item = { id, title, category, pages, date, url, format: "PDF", status: "pending" };
+                pendingDocuments.push(item);
+                return { rows: [item] };
+            }
+            if (sql.includes("FROM news") && sql.includes("status = 'pending'")) return { rows: pendingNews };
+            if (sql.includes("FROM documents") && sql.includes("status = 'pending'")) return { rows: pendingDocuments };
+            if (sql.startsWith("UPDATE documents SET status = 'published'")) {
+                const [url, id] = values;
+                const item = pendingDocuments.find((document) => document.id === id);
+                if (!item) return { rows: [] };
+                item.url = url;
+                item.status = "published";
+                return { rows: [item] };
+            }
+            if (sql.includes("FROM news") && sql.includes("WHERE id = $1 AND status = 'pending'")) return { rows: pendingNews.filter((item) => item.id === values[0] && item.status === "pending") };
+            if (sql.includes("FROM documents") && sql.includes("WHERE id = $1 AND status = 'pending'")) return { rows: pendingDocuments.filter((item) => item.id === values[0] && item.status === "pending") };
             if (sql.includes("FROM news")) return { rows: news.map((item, index) => ({ ...item, iso_date: item.isoDate, slug: item.id || `news-${index + 1}`, body: item.summary, position: index })) };
             if (sql.includes("FROM documents")) return { rows: documents.map((item, index) => ({ ...item, pages: item.pages || 0, position: index })) };
             if (sql.includes("FROM histories")) return { rows: histories.map((item, index) => ({ ...item, position: index })) };
@@ -19,13 +58,19 @@ before(async () => {
             throw new Error(`Unexpected query: ${sql}`);
         }
     };
-    server = createApp(database).listen(0);
+    server = createApp(database, {
+        moderationKey,
+        sessionSecret: "test-session-secret",
+        pendingUploadsDirectory,
+        uploadsDirectory
+    }).listen(0);
     await new Promise((resolve) => server.once("listening", resolve));
     baseUrl = `http://127.0.0.1:${server.address().port}`;
 });
 
 after(async () => {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await rm(testDirectory, { recursive: true, force: true });
 });
 
 test("health endpoint reports the API as available", async () => {
@@ -58,6 +103,86 @@ test("unknown collections return a JSON 404", async () => {
     const response = await fetch(`${baseUrl}/api/unknown`);
     assert.equal(response.status, 404);
     assert.deepEqual(await response.json(), { error: "Coleção não encontrada." });
+});
+
+test("public news submissions enter the moderation queue", async () => {
+    pendingNews = [];
+    const response = await fetch(`${baseUrl}/api/submissions/news`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            title: "Notícia enviada pela comunidade",
+            author: "Leitora",
+            category: "Cidade",
+            summary: "Resumo para revisão editorial.",
+            body: "Texto completo enviado pela comunidade.",
+            image: "/pending-uploads/123e4567-e89b-12d3-a456-426614174000.jpg"
+        })
+    });
+
+    assert.equal(response.status, 201);
+    assert.deepEqual(await response.json(), {
+        status: "pending",
+        message: "Envio recebido e aguardando aprovação editorial."
+    });
+    assert.equal(pendingNews[0].status, "pending");
+});
+
+test("secret moderation link opens a temporary session and redirects without its token", async () => {
+    const invalid = await fetch(`${baseUrl}/moderar/wrong-key`, { redirect: "manual" });
+    assert.equal(invalid.status, 404);
+
+    const response = await fetch(`${baseUrl}/moderar/${moderationKey}`, { redirect: "manual" });
+    assert.equal(response.status, 303);
+    assert.equal(response.headers.get("location"), "/publicar?moderar=1");
+
+    const cookie = response.headers.get("set-cookie").split(";")[0];
+    moderationCookie = cookie;
+    const sessionResponse = await fetch(`${baseUrl}/api/editor/session`, {
+        headers: { Cookie: cookie }
+    });
+    assert.deepEqual(await sessionResponse.json(), { authenticated: true });
+});
+
+test("moderation queue is not accessible without the session cookie", async () => {
+    const response = await fetch(`${baseUrl}/api/moderation/pending`);
+    assert.equal(response.status, 401);
+});
+
+test("approved document upload moves from private storage to public downloads", async () => {
+    const uploadResponse = await fetch(`${baseUrl}/api/uploads`, {
+        method: "POST",
+        headers: { "Content-Type": "application/pdf" },
+        body: Buffer.from("%PDF-1.4 sample document")
+    });
+    const upload = await uploadResponse.json();
+    assert.equal(uploadResponse.status, 201);
+
+    const submissionResponse = await fetch(`${baseUrl}/api/submissions/documents`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            title: "Guia enviado pela comunidade",
+            category: "Direitos",
+            pages: 3,
+            url: upload.url
+        })
+    });
+    assert.equal(submissionResponse.status, 201);
+    const submitted = pendingDocuments.at(-1);
+
+    const approvalResponse = await fetch(`${baseUrl}/api/moderation/documents/${submitted.id}/approve`, {
+        method: "POST",
+        headers: { Cookie: moderationCookie }
+    });
+    const approval = await approvalResponse.json();
+    assert.equal(approvalResponse.status, 200);
+    assert.equal(approval.status, "published");
+    assert.match(approval.item.url, /^\/uploads\//);
+
+    const downloadResponse = await fetch(`${baseUrl}${approval.item.url}`);
+    assert.equal(downloadResponse.status, 200);
+    assert.match(downloadResponse.headers.get("content-disposition"), /attachment/);
 });
 
 test("database setup applies the schema and seeds all collections", async () => {

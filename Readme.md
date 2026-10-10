@@ -1,144 +1,65 @@
 # Antifa Move
 
-Opa! Esse arquivo é uma "passagem de bastão" pros devs que entrarem nessa ao longo do tempo. A ideia é mostrar o que já está pronto e o que precisamos combinar antes de ligar uma publicação real.
+Portal editorial responsivo para notícias, materiais em PDF, história e lambes. Notícias e documentos públicos são lidos do PostgreSQL; os envios de visitantes passam por moderação antes de aparecer no site.
 
-Última atualização: 09:10 13:00
+## O que está pronto
 
-## Resumo rápido
+- Página inicial e arquivo de notícias carregados pela API e pelo PostgreSQL.
+- Página individual para cada notícia, com texto integral, imagem, categoria, data e autoria opcional.
+- Biblioteca de documentos com busca, filtros dinâmicos e download de PDFs publicados.
+- Formulário público para enviar notícias e PDFs sem criar uma conta.
+- Fila de moderação acessada por uma chave secreta compartilhada, sem contas individuais.
+- Validação de arquivos no servidor: imagens JPEG, PNG ou WebP até 5 MB; PDFs até 20 MB.
+- Layout adaptado para telas móveis.
+- Páginas de História e Lambes ainda usam conteúdo demonstrativo local.
 
-O frontend continua feito com HTML, CSS e JavaScript em módulos. O servidor Node.js/Express oferece uma API de leitura ligada a PostgreSQL, pronta para receber a URL de conexão do Neon. Login e publicação ainda não estão configurados.
+## Rodar localmente
 
-As notícias, documentos, histórias e lambes que aparecem hoje são exemplos escritos no arquivo `js/data.js`. Eles não são enviados a lugar algum e se perdem como fonte de conteúdo assim que forem substituídos por dados reais do CMS.
+Requisitos: Node.js 22 ou superior e PostgreSQL (por exemplo, Neon).
 
-## O que já está funcionando
+1. Copie `.env.example` para `.env`.
+2. Preencha `DATABASE_URL` com a URL do PostgreSQL.
+3. Gere uma chave longa para `CHAVE_MODERACAO` com `openssl rand -hex 32`.
+4. Gere outra chave, diferente, para `SESSION_SECRET` com `openssl rand -hex 32`.
+5. Rode `npm install`, `npm run db:setup` e `npm run dev`.
+6. Acesse `http://localhost:3000`; o envio público fica em `/publicar`.
 
-- As páginas públicas: `/` (Home), `/docs`, `/historia`, `/lambes` e `/noticias`.
-- A tela provisória de preparação editorial em `/publicar/publicar.html`; ainda sem login, persistência ou publicação.
-- Navegação entre páginas, link ativo e botão de menu para telas pequenas.
-- Busca e filtros locais na biblioteca de documentos.
-- Filtros locais na página de notícias.
-- Cartazes de lambe gerados no navegador e baixados como SVG A3.
-- Imagens, layout responsivo e estados de hover/foco.
+`npm start` inicia o servidor em modo normal. `npm run db:check` testa a conexão e `npm test` executa os testes.
 
-Essas interações trabalham apenas com os exemplos carregados no navegador. Ainda não existe publicação, edição, exclusão ou envio de arquivos ao servidor.
+## Envio e moderação
 
-## Onde encontrar cada coisa
+1. Qualquer visitante abre `/publicar`, preenche a notícia ou seleciona um PDF e envia sem cadastro.
+2. O servidor valida o tipo e o tamanho do arquivo e registra o conteúdo com status `pending`.
+3. O conteúdo pendente não aparece nas páginas públicas e o arquivo fica fora da pasta pública; uploads abandonados são removidos após 24 horas quando o servidor inicia.
+4. Uma pessoa da equipe acessa o link secreto `/moderar/<CHAVE_MODERACAO>`, que cria uma sessão segura e redireciona para a aba **Moderação**. O link deve ser compartilhado apenas com moderadores.
+5. Ao aprovar, o conteúdo passa a aparecer no portal e o arquivo é movido para a pasta de arquivos públicos. Ao rejeitar, o arquivo pendente é removido.
 
-- `index.html` e as pastas `docs/`, `historia/`, `lambes/` e `noticias/`: entradas das páginas. Cada pasta tem um `index.html` para que o servidor possa atender sua URL.
-- `js/app.js`: monta cabeçalho, rodapé e conteúdo das páginas; também liga busca, filtros, menu e downloads.
-- `js/data.js`: exemplos de notícias, documentos, histórias e cartazes.
-- `css/style.css`: cores, fontes, layout, responsividade e estados de interação.
-- `imgs/Utilizadas/`: fotografias usadas pelo site.
-- `imgs/Base/`: capturas que serviram de referência visual; não são as fotos dos cards.
+Há limites básicos por endereço IP para conter abuso: cinco uploads e cinco envios por hora. Esses limites são mantidos em memória e reiniciam quando o processo reinicia; uma operação pública maior deve usar rate limiting compartilhado e, se necessário, CAPTCHA.
 
-## Como os dados estão organizados hoje
+## Configuração de produção
 
-Os campos abaixo descrevem o que o frontend consome agora. Eles são um ponto de partida para a integração, não uma exigência sobre como o banco precisa ser modelado.
+- Configure `DATABASE_URL`, `CHAVE_MODERACAO` e `SESSION_SECRET` como variáveis secretas da plataforma. Não publique `.env` nem credenciais.
+- A chave da rota secreta pode aparecer nos logs HTTP da hospedagem antes do redirecionamento. Restrinja o acesso aos logs, use uma chave longa e rotacione-a se houver suspeita de exposição.
+- Use HTTPS; em `NODE_ENV=production`, o cookie da sessão de moderação recebe a flag `Secure`.
+- Monte armazenamento persistente para `.data/uploads` e `.data/pending-uploads`. O sistema usa essas pastas no disco local; hospedagens com disco efêmero podem perder os arquivos em reinícios ou deploys. Para esse tipo de hospedagem, migre os uploads para armazenamento de objetos persistente antes de publicar o site.
+- O servidor precisa estar acessível pela mesma origem das páginas, pois o frontend chama `/api/...`.
+- `npm run db:setup` cria/altera o schema e carrega os exemplos sem sobrescrever registros já existentes. Os itens de demonstração são conteúdo de exemplo e devem ser revisados antes de um lançamento público.
+- Configure backup do PostgreSQL e da área persistente de arquivos.
 
-### Notícias
+## API principal
 
-Em `js/data.js`, cada notícia de exemplo tem:
+- `GET /api/health`: estado da API e do banco.
+- `GET /api/news` e `GET /api/news/:slug`: notícias publicadas.
+- `GET /api/documents`: documentos publicados.
+- `POST /api/uploads`: recebe arquivo para revisão, sem autenticação.
+- `POST /api/submissions/news` e `POST /api/submissions/documents`: registra envios pendentes.
+- `GET /api/moderation/pending`: fila protegida pela sessão de moderação.
+- `POST /api/moderation/:collection/:id/approve` ou `/reject`: modera notícia ou documento.
 
-```js
-{
-	id: "jornada-de-trabalho",
-	category: "Trabalho",
-	date: "18 jun 2025",
-	isoDate: "2025-06-18",
-	title: "O que muda na jornada de trabalho",
-	summary: "Um resumo curto para aparecer no card.",
-	image: "/imgs/Utilizadas/Img1.avif"
-}
-```
+## Estrutura
 
-O card mostra categoria, data, título, resumo e foto. O campo `image` é atualmente um caminho de imagem local. Quando vier do CMS, a API pode fornecer uma URL pública, por exemplo `imageUrl`; o nome final pode ser combinado durante a integração.
-
-O link “Ler matéria” ainda não abre uma página completa de artigo: ele aponta para a notícia dentro de `/noticias`. Se o site precisar exibir a matéria integral, será necessário criar também um campo de conteúdo, como `body`, e uma rota de detalhe, por exemplo `/noticias/slug-da-materia`.
-
-### Lambes
-
-Os seis cartazes atuais são montados a partir de frases e cores em `js/data.js`. O navegador gera a prévia e o SVG para download. Isso não é um formulário para publicar novos cartazes.
-
-Para receber lambes enviados por pessoas, o frontend vai precisar da URL da prévia e da URL do arquivo final, além do título e formato. Uma ideia de registro para a API seria:
-
-```js
-{
-	id: "lambe-123",
-	title: "A cidade é nossa",
-	previewUrl: "/uploads/lambes/a-cidade-preview.jpg",
-	downloadUrl: "/uploads/lambes/a-cidade.svg",
-	format: "A3",
-	status: "published"
-}
-```
-
-A pessoa enviará um arquivo pronto (SVG/PDF). O modelo atual só gera os seis cartazes de demonstração.
-
-### Documentos
-
-Os documentos também são exemplos locais. Os campos atuais são título, categoria, formato, quantidade de páginas, data e `url`. Como os PDFs ainda não existem, `url` é `null` e o botão Baixar fica desabilitado.
-
-Quando houver arquivos, a API deve fornecer uma URL válida para download.
-
-## Como pode funcionar o envio de notícias
-
-O fluxo abaixo é uma sugestão para conversarmos, não algo já implementado:
-
-1. Uma pessoa autorizada abre o CMS ou formulário de publicação.
-2. Preenche título, foto de capa e texto complementar. Para uma matéria completa, também envia o conteúdo integral.
-3. Escolhe a categoria. A data pode ser definida pelo sistema, com possibilidade de agendar a publicação.
-4. O arquivo da foto é enviado para armazenamento de mídia. O banco guarda a URL e os metadados, não precisa guardar a imagem como texto/base64.
-5. A notícia fica como rascunho ou aguardando revisão.
-6. Depois da aprovação, ela aparece na Home e na página Notícias; notícias não publicadas não devem aparecer publicamente.
-
-Para o frontend atual, os campos mínimos do card são título, foto e texto complementar. A página Notícias também usa categoria e data para montar os cards e filtrar resultados. Para uma experiência editorial completa, recomendamos incluir um identificador/slug e o texto integral da matéria.
-
-## Como pode funcionar o envio de lambes
-
-O CMS pode permitir que a pessoa envie o arquivo pronto e uma imagem de prévia. Depois da validação e, se necessário, da revisão, a listagem pública apresenta a prévia e oferece o arquivo para download.
-
-Antes de implementar, precisamos decidir:
-
-- Quais formatos serão aceitos para envio e para download (por exemplo, SVG e PDF).
-- Se todos os arquivos precisam estar em A3.
-- Se os envios são publicados imediatamente ou passam por revisão.
-
-## Decisões para alinhar com o responsável pelo backend
-
-1. Quem pode publicar: equipe editorial, usuários com conta ou qualquer pessoa? (preferência apenas pelos "adms", pessoas selecionadas com acesso a login no CMS. Mas vale o que for mais facil)
-2. As notícias e os lambes passam por aprovação antes de aparecer no site?
-4. Qual CMS/API será usado e quais serão os endereços das rotas?
-5. Onde as imagens, PDFs e arquivos de lambe serão armazenados? Quais formatos e limites de tamanho serão aceitos?
-6. Como será feita a página própria da notícia? O card de resumo pegará o primeiro parágrafo ou sera necessário colocar um texto preparado?
-7. Quais categorias estarão disponíveis e quem poderá alterá-las?
-
-## Cuidados importantes na integração
-
-- Validar permissões, tamanho e tipo dos arquivos no servidor; validação apenas no navegador não protege o sistema.
-- Não publicar diretamente conteúdo enviado por qualquer pessoa sem antes decidir como será a moderação.
-- Tratar textos vindos do CMS como conteúdo, nunca como HTML confiável. No frontend, preferir `textContent` para texto simples.
-- Incluir estados de carregamento, lista vazia e erro quando os dados vierem da API.
-- Manter a busca e os filtros ligados aos dados recebidos do CMS, sem duplicar notícias em HTML fixo.
-- Para downloads, mostrar uma ação apenas quando houver um arquivo real disponível.
-
-
-## Backend inicial
-
-- Requer Node.js 22 ou superior.
-- Copie `.env.example` para `.env` e substitua `DATABASE_URL` pela connection string do Neon. O arquivo `.env` está ignorado pelo Git; nunca publique credenciais.
-- `npm install` instala as dependências; `npm run db:check` testa a conexão, `npm run db:setup` cria o schema e carrega os exemplos, `npm run dev` inicia o servidor em modo de desenvolvimento e `npm start` inicia normalmente.
-- O site e a API ficam disponíveis na mesma origem, por padrão em `http://localhost:3000`.
-- `GET /api/health` verifica o servidor e a conexão ao banco.
-- `GET /api/news`, `/api/documents`, `/api/histories` e `/api/posters` retornam as coleções em JSON.
-- O schema fica em `db/schema.sql`. A tabela `content` separa as coleções e armazena os objetos em JSONB; na primeira inicialização, os exemplos de `js/data.js` são copiados sem sobrescrever registros existentes.
-- Esta etapa não oferece rotas de escrita ou autenticação. As coleções podem ser consultadas pela API, mas o frontend ainda usa seus módulos locais.
-
-Para rodar os testes da API: `npm test`.
-
-## Próximo passo sugerido
-
-Antes de conectar o CMS, alinhar as decisões da seção acima, principalmente quem pode enviar conteúdo e se haverá moderação. Com isso definido, o backend pode compartilhar os formatos de resposta e rotas; então o frontend troca os exemplos de `js/data.js` por chamadas à API e liga os formulários ao fluxo de publicação.
-
-## Importante!
-
-Quaisquer alterações de layout devem ser conversadas antes de se tornarem alterações finais, porém há bastante flexibilidade principalmente para questões de backend
+- `server.js`: servidor Express, API, moderação e arquivos enviados.
+- `database.js` e `db/schema.sql`: conexão, schema e conteúdo inicial.
+- `js/app.js`: interface, chamadas à API, filtros, envios e moderação.
+- `js/data.js`: conteúdo demonstrativo das páginas História e Lambes e dados usados no seed inicial.
+- `css/style.css`: estilos e adaptação responsiva.

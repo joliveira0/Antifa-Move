@@ -103,44 +103,10 @@ export async function initializeDatabase(database) {
                 const placeholders = columns.map((_, index) => `$${index + 1}`).join(", ");
                 const values = Object.values(row);
 
-                if (tableName === "lambes") {
-                    await client.query(`
-                        INSERT INTO lambes (${columns.join(", ")})
-                        VALUES (${placeholders})
-                        ON CONFLICT (id) DO UPDATE SET
-                            title = EXCLUDED.title,
-                            lines = EXCLUDED.lines,
-                            background = EXCLUDED.background,
-                            foreground = EXCLUDED.foreground,
-                            border = EXCLUDED.border,
-                            rotation = EXCLUDED.rotation,
-                            preview_url = EXCLUDED.preview_url,
-                            download_url = EXCLUDED.download_url,
-                            format = EXCLUDED.format,
-                            status = EXCLUDED.status,
-                            position = EXCLUDED.position,
-                            updated_at = NOW()
-                    `, values);
-                    continue;
-                }
-
-                const updateColumns = [
-                    "category",
-                    "title",
-                    "summary",
-                    "image",
-                    "date",
-                    "iso_date",
-                    "status",
-                    "position",
-                    "updated_at"
-                ].filter((column) => columns.includes(column));
-
-                const updateSql = updateColumns.map((column) => `${column} = EXCLUDED.${column}`).join(", ");
                 await client.query(`
                     INSERT INTO ${tableName} (${columns.join(", ")})
                     VALUES (${placeholders})
-                    ON CONFLICT (id) DO UPDATE SET ${updateSql}, updated_at = NOW()
+                    ON CONFLICT (id) DO NOTHING
                 `, values);
             }
         }

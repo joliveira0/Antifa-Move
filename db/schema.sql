@@ -3,6 +3,7 @@ CREATE TABLE IF NOT EXISTS news (
     slug TEXT NOT NULL UNIQUE,
     category TEXT NOT NULL,
     title TEXT NOT NULL,
+    author TEXT,
     summary TEXT NOT NULL,
     body TEXT,
     image TEXT,
@@ -13,6 +14,8 @@ CREATE TABLE IF NOT EXISTS news (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE news ADD COLUMN IF NOT EXISTS author TEXT;
 
 CREATE TABLE IF NOT EXISTS documents (
     id TEXT PRIMARY KEY,
@@ -59,6 +62,8 @@ CREATE TABLE IF NOT EXISTS lambes (
 );
 
 CREATE INDEX IF NOT EXISTS news_position_idx ON news (position, id);
+CREATE INDEX IF NOT EXISTS news_status_created_idx ON news (status, created_at DESC);
 CREATE INDEX IF NOT EXISTS documents_position_idx ON documents (position, id);
+CREATE INDEX IF NOT EXISTS documents_status_created_idx ON documents (status, created_at DESC);
 CREATE INDEX IF NOT EXISTS histories_position_idx ON histories (position, id);
 CREATE INDEX IF NOT EXISTS lambes_position_idx ON lambes (position, id);
