@@ -571,7 +571,7 @@ async function renderPublishPage() {
     const section = makeElement("section", "content-width publish-workspace");
     section.setAttribute("aria-label", "Preparação de conteúdo");
     pageContent.append(section);
-    const notice = makeElement("p", "publish-notice", "Não é necessário criar uma conta. Os envios ficam privados até a aprovação da equipe. Envie apenas materiais que você tem autorização para compartilhar.");
+    const notice = makeElement("p", "publish-notice", "Não é necessário criar uma conta. Os envios ficam privados até a aprovação da equipe. Arquivos de até 4 MB; envie apenas materiais que você tem autorização para compartilhar.");
     notice.setAttribute("role", "status");
     const modes = makeElement("div", "publish-types");
     modes.setAttribute("role", "group");

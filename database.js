@@ -21,7 +21,7 @@ export function createDatabase(connectionString = process.env.DATABASE_URL) {
 
     return new Pool({
         connectionString,
-        max: 10,
+        max: process.env.VERCEL === "1" ? 1 : 10,
         idleTimeoutMillis: 30000,
         connectionTimeoutMillis: 10000
     });

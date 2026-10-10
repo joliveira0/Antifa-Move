@@ -9,7 +9,7 @@ Portal editorial responsivo para notícias, materiais em PDF, história e lambes
 - Biblioteca de documentos com busca, filtros dinâmicos e download de PDFs publicados.
 - Formulário público para enviar notícias e PDFs sem criar uma conta.
 - Fila de moderação acessada por uma chave secreta compartilhada, sem contas individuais.
-- Validação de arquivos no servidor: imagens JPEG, PNG ou WebP até 5 MB; PDFs até 20 MB.
+- Validação de arquivos no servidor: imagens JPEG, PNG ou WebP e PDFs de até 4 MB por arquivo, compatível com o limite de entrada das funções da Vercel.
 - Layout adaptado para telas móveis.
 - Páginas de História e Lambes ainda usam conteúdo demonstrativo local.
 
@@ -26,25 +26,35 @@ Requisitos: Node.js 22 ou superior e PostgreSQL (por exemplo, Neon).
 
 `npm start` inicia o servidor em modo normal. `npm run db:check` testa a conexão e `npm test` executa os testes.
 
+## Implantar na Vercel
+
+1. Mantenha `DATABASE_URL` ligado ao PostgreSQL existente (por exemplo, Neon). Os registros de notícias, documentos e a fila de moderação continuam armazenados nesse banco.
+2. Na Vercel, crie um **Blob privado** e conecte-o ao projeto nos ambientes Production e Preview. O Blob guarda apenas os bytes das imagens e PDFs; conteúdo e estados continuam no PostgreSQL.
+3. Configure `DATABASE_URL`, `CHAVE_MODERACAO` e `SESSION_SECRET` em **Project Settings → Environment Variables**. Conectar o Blob injeta as credenciais necessárias para o SDK.
+4. Faça um novo deploy. `vercel.json` encaminha API, link de moderação, downloads e rotas de páginas às funções/arquivos corretos.
+5. Rode `npm run db:setup` uma vez com a URL do banco para aplicar o schema (incluindo status pendente e autor opcional) e carregar os exemplos.
+
+Em desenvolvimento local, o armazenamento de arquivos usa `.data/`. Na Vercel, arquivos são gravados em um Blob privado e só são entregues por rotas da aplicação; a área pendente requer sessão de moderação.
+
 ## Envio e moderação
 
 1. Qualquer visitante abre `/publicar`, preenche a notícia ou seleciona um PDF e envia sem cadastro.
 2. O servidor valida o tipo e o tamanho do arquivo e registra o conteúdo com status `pending`.
-3. O conteúdo pendente não aparece nas páginas públicas e o arquivo fica fora da pasta pública; uploads abandonados são removidos após 24 horas quando o servidor inicia.
+3. O conteúdo pendente não aparece nas páginas públicas e o arquivo fica em armazenamento privado. No modo local, uploads abandonados são removidos após 24 horas quando o servidor inicia.
 4. Uma pessoa da equipe acessa o link secreto `/moderar/<CHAVE_MODERACAO>`, que cria uma sessão segura e redireciona para a aba **Moderação**. O link deve ser compartilhado apenas com moderadores.
-5. Ao aprovar, o conteúdo passa a aparecer no portal e o arquivo é movido para a pasta de arquivos públicos. Ao rejeitar, o arquivo pendente é removido.
+5. Ao aprovar, o conteúdo passa a aparecer no portal e os bytes do arquivo são copiados para um caminho publicado exclusivo. Ao rejeitar, o arquivo pendente é removido.
 
-Há limites básicos por endereço IP para conter abuso: cinco uploads e cinco envios por hora. Esses limites são mantidos em memória e reiniciam quando o processo reinicia; uma operação pública maior deve usar rate limiting compartilhado e, se necessário, CAPTCHA.
+Há limites por endereço IP para conter abuso: cinco uploads e cinco envios por hora. A contagem e os registros ficam no PostgreSQL para continuarem valendo entre instâncias serverless; o endereço é armazenado como hash.
 
 ## Configuração de produção
 
 - Configure `DATABASE_URL`, `CHAVE_MODERACAO` e `SESSION_SECRET` como variáveis secretas da plataforma. Não publique `.env` nem credenciais.
 - A chave da rota secreta pode aparecer nos logs HTTP da hospedagem antes do redirecionamento. Restrinja o acesso aos logs, use uma chave longa e rotacione-a se houver suspeita de exposição.
 - Use HTTPS; em `NODE_ENV=production`, o cookie da sessão de moderação recebe a flag `Secure`.
-- Monte armazenamento persistente para `.data/uploads` e `.data/pending-uploads`. O sistema usa essas pastas no disco local; hospedagens com disco efêmero podem perder os arquivos em reinícios ou deploys. Para esse tipo de hospedagem, migre os uploads para armazenamento de objetos persistente antes de publicar o site.
+- O armazenamento local `.data/` serve apenas para desenvolvimento. Em produção na Vercel, conecte um Blob privado; sem ele, os uploads da função serverless não terão persistência.
 - O servidor precisa estar acessível pela mesma origem das páginas, pois o frontend chama `/api/...`.
 - `npm run db:setup` cria/altera o schema e carrega os exemplos sem sobrescrever registros já existentes. Os itens de demonstração são conteúdo de exemplo e devem ser revisados antes de um lançamento público.
-- Configure backup do PostgreSQL e da área persistente de arquivos.
+- Configure backup do PostgreSQL e do Blob conectado.
 
 ## API principal
 

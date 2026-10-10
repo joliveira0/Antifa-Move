@@ -1,0 +1,40 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "/api/dispatch?__path=/api/:path*"
+    },
+    {
+      "source": "/moderar/:token",
+      "destination": "/api/dispatch?__path=/moderar/:token"
+    },
+    {
+      "source": "/uploads/:filename",
+      "destination": "/api/dispatch?__path=/uploads/:filename"
+    },
+    {
+      "source": "/docs",
+      "destination": "/docs/docs.html"
+    },
+    {
+      "source": "/historia",
+      "destination": "/historia/historia.html"
+    },
+    {
+      "source": "/lambes",
+      "destination": "/lambes/lambes.html"
+    },
+    {
+      "source": "/noticias",
+      "destination": "/noticias/noticias.html"
+    },
+    {
+      "source": "/noticias/:slug",
+      "destination": "/noticias/noticias.html"
+    },
+    {
+      "source": "/publicar",
+      "destination": "/publicar/publicar.html"
+    }
+  ]
+}

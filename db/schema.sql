@@ -61,6 +61,14 @@ CREATE TABLE IF NOT EXISTS lambes (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS api_rate_limits (
+    scope TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    window_started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    request_count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (scope, subject)
+);
+
 CREATE INDEX IF NOT EXISTS news_position_idx ON news (position, id);
 CREATE INDEX IF NOT EXISTS news_status_created_idx ON news (status, created_at DESC);
 CREATE INDEX IF NOT EXISTS documents_position_idx ON documents (position, id);

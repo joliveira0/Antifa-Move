@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
+import { readFile } from "node:fs/promises";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp } from "./server.js";
+import { createLocalStorage } from "./storage.js";
+import dispatch from "./api/dispatch.js";
 import { documents, histories, news, posters } from "./js/data.js";
 import { initializeDatabase } from "./database.js";
 
@@ -11,8 +14,6 @@ let server;
 let database;
 let baseUrl;
 let testDirectory;
-let pendingUploadsDirectory;
-let uploadsDirectory;
 const moderationKey = "test-moderation-key-long-enough-to-be-secret";
 let pendingNews = [];
 let pendingDocuments = [];
@@ -20,13 +21,14 @@ let moderationCookie;
 
 before(async () => {
     testDirectory = await mkdtemp(join(tmpdir(), "antifa-move-test-"));
-    pendingUploadsDirectory = join(testDirectory, "pending");
-    uploadsDirectory = join(testDirectory, "public");
+    const pendingUploadsDirectory = join(testDirectory, "pending");
+    const uploadsDirectory = join(testDirectory, "public");
     await mkdir(pendingUploadsDirectory);
     await writeFile(join(pendingUploadsDirectory, "123e4567-e89b-12d3-a456-426614174000.jpg"), "test upload");
     database = {
         async query(sql, values = []) {
             if (sql.includes("SELECT 1")) return { rows: [{ "?column?": 1 }] };
+            if (sql.includes("INSERT INTO api_rate_limits")) return { rows: [{ request_count: 1 }] };
             if (sql.includes("INSERT INTO news")) {
                 const [id, slug, category, title, author, summary, body, image, date, isoDate] = values;
                 const item = { id, slug, category, title, author, summary, body, image, date, iso_date: isoDate, status: "pending" };
@@ -61,8 +63,7 @@ before(async () => {
     server = createApp(database, {
         moderationKey,
         sessionSecret: "test-session-secret",
-        pendingUploadsDirectory,
-        uploadsDirectory
+        storage: createLocalStorage({ pendingDirectory: pendingUploadsDirectory, publicDirectory: uploadsDirectory })
     }).listen(0);
     await new Promise((resolve) => server.once("listening", resolve));
     baseUrl = `http://127.0.0.1:${server.address().port}`;
@@ -103,6 +104,51 @@ test("unknown collections return a JSON 404", async () => {
     const response = await fetch(`${baseUrl}/api/unknown`);
     assert.equal(response.status, 404);
     assert.deepEqual(await response.json(), { error: "Coleção não encontrada." });
+});
+
+test("Vercel configuration routes API and user-facing paths to the right handlers", async () => {
+    const config = JSON.parse(await readFile(new URL("./vercel.json", import.meta.url), "utf8"));
+    const rewrites = new Map(config.rewrites.map((rewrite) => [rewrite.source, rewrite.destination]));
+
+    assert.equal(rewrites.get("/api/:path*"), "/api/dispatch?__path=/api/:path*");
+    assert.equal(rewrites.get("/moderar/:token"), "/api/dispatch?__path=/moderar/:token");
+    assert.equal(rewrites.get("/noticias/:slug"), "/noticias/noticias.html");
+    assert.equal(rewrites.get("/publicar"), "/publicar/publicar.html");
+});
+
+test("Vercel dispatcher rejects paths outside the application routes", async () => {
+    const response = {
+        statusCode: 200,
+        headers: {},
+        setHeader(name, value) {
+            this.headers[name] = value;
+        },
+        end(body) {
+            this.body = body;
+        }
+    };
+
+    await dispatch({ url: "/api/dispatch?__path=/etc/passwd" }, response);
+    assert.equal(response.statusCode, 404);
+    assert.equal(response.body, "Not found");
+});
+
+test("concurrent file promotions use distinct published paths", async () => {
+    const pendingDirectory = join(testDirectory, "concurrent-pending");
+    const publicDirectory = join(testDirectory, "concurrent-public");
+    await mkdir(pendingDirectory);
+    const filename = "123e4567-e89b-12d3-a456-426614174000.pdf";
+    await writeFile(join(pendingDirectory, filename), "%PDF-1.4 concurrent");
+    const storage = createLocalStorage({ pendingDirectory, publicDirectory });
+
+    const [first, second] = await Promise.all([
+        storage.promotePending(filename),
+        storage.promotePending(filename)
+    ]);
+    assert.notEqual(first.filename, second.filename);
+    await first.rollback();
+    assert.ok(await storage.readPublic(second.filename));
+    await second.commit();
 });
 
 test("public news submissions enter the moderation queue", async () => {

@@ -1,10 +1,10 @@
 import "dotenv/config";
 import { createHmac, createHash, randomUUID, timingSafeEqual } from "node:crypto";
-import { mkdir, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import { createDatabase, initializeDatabase } from "./database.js";
+import { createStorage } from "./storage.js";
 
 const projectRoot = dirname(fileURLToPath(import.meta.url));
 const collections = {
@@ -21,10 +21,10 @@ const collections = {
 const sessionCookie = "antifa_editor";
 const sessionLifetimeSeconds = 8 * 60 * 60;
 const uploadTypes = {
-    "image/jpeg": { extension: ".jpg", maxBytes: 5 * 1024 * 1024 },
-    "image/png": { extension: ".png", maxBytes: 5 * 1024 * 1024 },
-    "image/webp": { extension: ".webp", maxBytes: 5 * 1024 * 1024 },
-    "application/pdf": { extension: ".pdf", maxBytes: 20 * 1024 * 1024 }
+    "image/jpeg": { extension: ".jpg", maxBytes: 4 * 1024 * 1024 },
+    "image/png": { extension: ".png", maxBytes: 4 * 1024 * 1024 },
+    "image/webp": { extension: ".webp", maxBytes: 4 * 1024 * 1024 },
+    "application/pdf": { extension: ".pdf", maxBytes: 4 * 1024 * 1024 }
 };
 const newsCategories = new Set(["Trabalho", "Economia", "Direitos", "Política", "História", "Cidade"]);
 const documentCategories = new Set(["Trabalho", "Economia", "Direitos", "Cidade", "História"]);
@@ -116,45 +116,41 @@ function requiredText(value, maximumLength) {
     return typeof value === "string" && value.trim().length > 0 && value.trim().length <= maximumLength;
 }
 
-function consumeRateLimit(limits, key, maximum, windowMs) {
-    const now = Date.now();
-    const current = limits.get(key);
-    if (current && now - current.startedAt < windowMs && current.count >= maximum) return false;
-    if (!current || now - current.startedAt >= windowMs) limits.set(key, { startedAt: now, count: 1 });
-    else current.count += 1;
-    return true;
+async function consumeRateLimit(database, scope, address, maximum, windowMs) {
+    const subject = createHash("sha256").update(address).digest("hex");
+    const { rows } = await database.query(`
+        INSERT INTO api_rate_limits (scope, subject, window_started_at, request_count)
+        VALUES ($1, $2, NOW(), 1)
+        ON CONFLICT (scope, subject) DO UPDATE SET
+            request_count = CASE
+                WHEN api_rate_limits.window_started_at <= NOW() - ($4::double precision * INTERVAL '1 millisecond') THEN 1
+                WHEN api_rate_limits.request_count < $3 THEN api_rate_limits.request_count + 1
+                ELSE api_rate_limits.request_count
+            END,
+            window_started_at = CASE
+                WHEN api_rate_limits.window_started_at <= NOW() - ($4::double precision * INTERVAL '1 millisecond') THEN NOW()
+                ELSE api_rate_limits.window_started_at
+            END
+        RETURNING request_count
+    `, [scope, subject, maximum, windowMs]);
+    return rows[0].request_count <= maximum;
 }
 
-async function hasPendingUpload(url, directory, extensionPattern) {
+async function hasPendingUpload(url, extensionPattern, storage) {
     const filename = typeof url === "string" ? url.match(extensionPattern)?.[1] : null;
     if (!filename) return false;
-    try {
-        return (await stat(resolve(directory, filename))).isFile();
-    } catch (error) {
-        if (error.code === "ENOENT") return false;
-        throw error;
-    }
-}
-
-async function cleanupExpiredPendingUploads(directory) {
-    await mkdir(directory, { recursive: true });
-    const entries = await readdir(directory, { withFileTypes: true });
-    const expiration = Date.now() - 24 * 60 * 60 * 1000;
-    for (const entry of entries) {
-        if (!entry.isFile()) continue;
-        const path = resolve(directory, entry.name);
-        if ((await stat(path)).mtimeMs < expiration) await unlink(path);
-    }
+    return storage.hasPending(filename);
 }
 
 export function createApp(database, {
     moderationKey = process.env.CHAVE_MODERACAO,
     sessionSecret = process.env.SESSION_SECRET,
-    uploadsDirectory = resolve(projectRoot, ".data/uploads"),
-    pendingUploadsDirectory = resolve(projectRoot, ".data/pending-uploads")
+    storage = createStorage()
 } = {}) {
     const app = express();
-    const publicAttempts = new Map();
+    const getClientAddress = (request) => request.headers["x-forwarded-for"]?.split(",").at(-1)?.trim()
+        || request.socket.remoteAddress
+        || "unknown";
 
     app.get("/api/health", async (_request, response) => {
         await database.query("SELECT 1");
@@ -200,9 +196,9 @@ export function createApp(database, {
         response.json(normalizeRow("news", rows[0]));
     });
 
-    app.post("/api/uploads", express.raw({ type: "*/*", limit: "20mb" }), async (request, response) => {
-        const address = request.ip || request.socket.remoteAddress || "unknown";
-        if (!consumeRateLimit(publicAttempts, `upload:${address}`, 5, 60 * 60 * 1000)) {
+    app.post("/api/uploads", express.raw({ type: "*/*", limit: "4mb" }), async (request, response) => {
+        const address = getClientAddress(request);
+        if (!await consumeRateLimit(database, "upload", address, 5, 60 * 60 * 1000)) {
             response.status(429).json({ error: "Limite de envios atingido. Tente novamente em uma hora." });
             return;
         }
@@ -219,15 +215,14 @@ export function createApp(database, {
             return;
         }
 
-        await mkdir(pendingUploadsDirectory, { recursive: true });
         const filename = `${randomUUID()}${type.extension}`;
-        await writeFile(resolve(pendingUploadsDirectory, filename), buffer, { flag: "wx" });
+        await storage.savePending(filename, buffer, contentType);
         response.status(201).json({ url: `/pending-uploads/${filename}` });
     });
 
     app.post("/api/submissions/news", express.json({ limit: "100kb" }), async (request, response) => {
-        const address = request.ip || request.socket.remoteAddress || "unknown";
-        if (!consumeRateLimit(publicAttempts, `submission:${address}`, 5, 60 * 60 * 1000)) {
+        const address = getClientAddress(request);
+        if (!await consumeRateLimit(database, "submission", address, 5, 60 * 60 * 1000)) {
             response.status(429).json({ error: "Limite de envios atingido. Tente novamente em uma hora." });
             return;
         }
@@ -240,7 +235,7 @@ export function createApp(database, {
             response.status(400).json({ error: "Revise o título, categoria, resumo, texto e imagem da notícia." });
             return;
         }
-        if (!await hasPendingUpload(image, pendingUploadsDirectory, /^\/pending-uploads\/([a-f0-9-]+\.(?:jpg|png|webp))$/)) {
+        if (!await hasPendingUpload(image, /^\/pending-uploads\/([a-f0-9-]+\.(?:jpg|png|webp))$/, storage)) {
             response.status(400).json({ error: "A imagem enviada não foi encontrada. Envie o arquivo novamente." });
             return;
         }
@@ -259,8 +254,8 @@ export function createApp(database, {
     });
 
     app.post("/api/submissions/documents", express.json({ limit: "20kb" }), async (request, response) => {
-        const address = request.ip || request.socket.remoteAddress || "unknown";
-        if (!consumeRateLimit(publicAttempts, `submission:${address}`, 5, 60 * 60 * 1000)) {
+        const address = getClientAddress(request);
+        if (!await consumeRateLimit(database, "submission", address, 5, 60 * 60 * 1000)) {
             response.status(429).json({ error: "Limite de envios atingido. Tente novamente em uma hora." });
             return;
         }
@@ -272,7 +267,7 @@ export function createApp(database, {
             response.status(400).json({ error: "Revise o título, categoria, páginas e arquivo PDF." });
             return;
         }
-        if (!await hasPendingUpload(url, pendingUploadsDirectory, /^\/pending-uploads\/([a-f0-9-]+\.pdf)$/)) {
+        if (!await hasPendingUpload(url, /^\/pending-uploads\/([a-f0-9-]+\.pdf)$/, storage)) {
             response.status(400).json({ error: "O PDF enviado não foi encontrado. Envie o arquivo novamente." });
             return;
         }
@@ -305,7 +300,7 @@ export function createApp(database, {
         });
     });
 
-    app.get("/api/moderation/uploads/:filename", (request, response) => {
+    app.get("/api/moderation/uploads/:filename", async (request, response) => {
         if (!hasEditorSession(request, sessionSecret)) {
             response.status(401).json({ error: "Acesso restrito à moderação." });
             return;
@@ -314,9 +309,14 @@ export function createApp(database, {
             response.status(404).json({ error: "Arquivo não encontrado." });
             return;
         }
-        response.sendFile(resolve(pendingUploadsDirectory, request.params.filename), {
-            headers: { "X-Content-Type-Options": "nosniff" }
-        });
+        const file = await storage.readPending(request.params.filename);
+        if (!file) {
+            response.status(404).json({ error: "Arquivo não encontrado." });
+            return;
+        }
+        response.setHeader("Content-Type", file.contentType);
+        response.setHeader("X-Content-Type-Options", "nosniff");
+        response.send(file.buffer);
     });
 
     app.post("/api/moderation/:collection/:id/:action", async (request, response) => {
@@ -353,9 +353,8 @@ export function createApp(database, {
         }
 
         if (action === "approve") {
-            const publicUrl = `/uploads/${filename}`;
-            await mkdir(uploadsDirectory, { recursive: true });
-            await rename(resolve(pendingUploadsDirectory, filename), resolve(uploadsDirectory, filename));
+            const promotedFile = await storage.promotePending(filename);
+            const publicUrl = `/uploads/${promotedFile.filename}`;
             let result;
             try {
                 result = await database.query(
@@ -363,23 +362,36 @@ export function createApp(database, {
                     [publicUrl, id]
                 );
             } catch (error) {
-                await rename(resolve(uploadsDirectory, filename), resolve(pendingUploadsDirectory, filename));
+                await promotedFile.rollback();
                 throw error;
             }
             if (!result.rows.length) {
-                await rename(resolve(uploadsDirectory, filename), resolve(pendingUploadsDirectory, filename));
+                await promotedFile.rollback();
                 response.status(409).json({ error: "Este envio já foi moderado." });
                 return;
+            }
+            try {
+                await promotedFile.commit();
+            } catch (error) {
+                console.error("Conteúdo publicado, mas o arquivo privado pendente não foi removido:", error);
             }
             response.json({ status: "published", item: normalizeRow(tableName, result.rows[0]) });
             return;
         }
 
-        await unlink(resolve(pendingUploadsDirectory, filename));
-        await database.query(
-            `UPDATE ${tableName} SET status = 'rejected', updated_at = NOW() WHERE id = $1 AND status = 'pending'`,
+        const rejection = await database.query(
+            `UPDATE ${tableName} SET status = 'rejected', updated_at = NOW() WHERE id = $1 AND status = 'pending' RETURNING id`,
             [id]
         );
+        if (!rejection.rows.length) {
+            response.status(409).json({ error: "Este envio já foi moderado." });
+            return;
+        }
+        try {
+            await storage.rejectPending(filename);
+        } catch (error) {
+            console.error("Envio rejeitado, mas o arquivo privado não foi removido:", error);
+        }
         response.json({ status: "rejected" });
     });
 
@@ -395,15 +407,23 @@ export function createApp(database, {
         response.json(rows.map((row) => normalizeRow(tableName, row)));
     });
 
-    app.use("/uploads", express.static(uploadsDirectory, {
-        dotfiles: "deny",
-        fallthrough: true,
-        index: false,
-        setHeaders(response, path) {
-            if (path.endsWith(".pdf")) response.setHeader("Content-Disposition", "attachment");
-            response.setHeader("X-Content-Type-Options", "nosniff");
+    app.get("/uploads/:filename", async (request, response) => {
+        if (!/^[a-f0-9-]+\.(jpg|png|webp|pdf)$/.test(request.params.filename)) {
+            response.status(404).end();
+            return;
         }
-    }));
+        const file = await storage.readPublic(request.params.filename);
+        if (!file) {
+            response.status(404).end();
+            return;
+        }
+        response.setHeader("Content-Type", file.contentType);
+        response.setHeader("X-Content-Type-Options", "nosniff");
+        if (request.params.filename.endsWith(".pdf")) {
+            response.setHeader("Content-Disposition", `attachment; filename="${request.params.filename}"`);
+        }
+        response.send(file.buffer);
+    });
     app.use("/css", express.static(resolve(projectRoot, "css")));
     app.use("/js", express.static(resolve(projectRoot, "js")));
     app.use("/imgs", express.static(resolve(projectRoot, "imgs")));
@@ -454,7 +474,7 @@ if (isMainModule) {
     try {
         database = createDatabase();
         await initializeDatabase(database);
-        await cleanupExpiredPendingUploads(resolve(projectRoot, ".data/pending-uploads"));
+        await createStorage().cleanupPending(24 * 60 * 60 * 1000);
         createApp(database).listen(port, () => {
             console.log(`Antifa Move disponível em http://localhost:${port}`);
         });
